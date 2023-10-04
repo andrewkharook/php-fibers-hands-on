@@ -2,14 +2,6 @@
 
 declare(strict_types=1);
 
-/**
- * Refactored the code to be non-blocking.
- * The code will start our conversion process and will keep running
- * while the converter process does its work rather than wait for the result.
- * We achieve this by replacing the simple `exec` function call with `proc_open`.
- * Our code then will sit in a loop polling the status of the other processes to see if its completed or not
- */
-
 const SOURCE_DIR = './photos/';
 const DEST_DIR = './photos/export/';
 const SOURCE_EXT = 'tiff';
@@ -25,16 +17,22 @@ foreach (new DirectoryIterator(SOURCE_DIR) as $item) {
         $src = $item->getPathname();
         $dest = getDestPath($item);
 
+        /*
+         * We create a new fiber for each file that we want to convert
+         */
         $fiber = new Fiber(convertPhoto(...));
         $fiber->start($converter, $src, $dest);
         $fiberList[] = $fiber;
     }
 }
 
+/*
+ * Loop over the fibers, resuming each one until they all terminate, and we can get the conversion result.
+ */
 while ($fiberList) {
     foreach ($fiberList as $id => $fiber) {
         if ($fiber->isTerminated()) {
-            [$source, $destination] = $fiber->getReturn();
+            [$src, $dest] = $fiber->getReturn();
             echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
             unset($fiberList[$id]);
         } else {
@@ -69,6 +67,11 @@ function convertPhoto(string $converter, string $src, string $dest): array
     }
 
     do {
+        /*
+         * Fiber::suspend() lets PHP continue running the main process without waiting for conversion to complete.
+         * We need to resume it at come point (line 39) to get the conversion result, otherwise fiber process will run forever.
+         * That's why we've put all fibers on the list (line 23), so we could iterate through them, resume and get a result when ready.
+         */
         Fiber::suspend();
         $status = proc_get_status($proc);
     } while ($status['running']);
@@ -80,6 +83,6 @@ function convertPhoto(string $converter, string $src, string $dest): array
     if ($success) {
         return [$src, $dest];
     } else {
-        throw new \RuntimeException('Unable to perform conversion');
+        throw new RuntimeException('Unable to perform conversion');
     }
 }
