@@ -8,7 +8,7 @@ const SOURCE_EXT = 'tiff';
 const DEST_EXT = 'jpg';
 
 $converter = getenv('CONVERTER_BIN') ?: 'convert';
-
+$processesNumber = 4;
 $fiberList = [];
 
 $start = microtime(true);
@@ -17,28 +17,21 @@ foreach (new DirectoryIterator(SOURCE_DIR) as $item) {
         $src = $item->getPathname();
         $dest = getDestPath($item);
 
-        /*
-         * We create a new fiber for each file that we want to convert
-         */
         $fiber = new Fiber(convertPhoto(...));
         $fiber->start($converter, $src, $dest);
         $fiberList[] = $fiber;
+        if (count($fiberList) >= $processesNumber) {
+            foreach (waitForFibers($fiberList, 1) as $fiber) {
+                [$src, $dest] = $fiber->getReturn();
+                echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
+            }
+        }
     }
 }
 
-/*
- * Loop over the fibers, resuming each one until they all terminate, and we can get the conversion result.
- */
-while ($fiberList) {
-    foreach ($fiberList as $id => $fiber) {
-        if ($fiber->isTerminated()) {
-            [$src, $dest] = $fiber->getReturn();
-            echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
-            unset($fiberList[$id]);
-        } else {
-            $fiber->resume();
-        }
-    }
+foreach (waitForFibers($fiberList) as $fiber) {
+    [$src, $dest] = $fiber->getReturn();
+    echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
 }
 
 $end = microtime(true);
@@ -67,11 +60,6 @@ function convertPhoto(string $converter, string $src, string $dest): array
     }
 
     do {
-        /*
-         * Fiber::suspend() lets PHP continue running the main process without waiting for conversion to complete.
-         * We need to resume it at come point (line 39) to get the conversion result, otherwise fiber process will run forever.
-         * That's why we've put all fibers on the list (line 23), so we could iterate through them, resume and get a result when ready.
-         */
         Fiber::suspend();
         $status = proc_get_status($proc);
     } while ($status['running']);
@@ -85,4 +73,29 @@ function convertPhoto(string $converter, string $src, string $dest): array
     } else {
         throw new RuntimeException('Unable to perform conversion');
     }
+}
+
+/**
+ * @param Fiber[] $fiberList Reference to the list of fibers
+ * @param int|null $completeLimit Minimum number of fibers that need to finish the job for the function to return
+ * @return Fiber[]
+ * @throws Throwable
+ */
+function waitForFibers(array &$fiberList, ?int $completeLimit = null): array
+{
+    $completed = [];
+    $completeLimit ??= count($fiberList);
+    while (count($fiberList) && count($completed) < $completeLimit) {
+        usleep(1000);
+        foreach ($fiberList as $id => $fiber) {
+            if ($fiber->isSuspended()) {
+                $fiber->resume();
+            } elseif ($fiber->isTerminated()) {
+                $completed[] = $fiber;
+                unset($fiberList[$id]);
+            }
+        }
+    }
+
+    return $completed;
 }
