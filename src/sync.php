@@ -29,5 +29,5 @@ echo 'Directory processed in ' . round($end - $start, 1) . ' seconds' . PHP_EOL;
 
 function getDestPath(DirectoryIterator $file): string
 {
-    return DEST_DIR . substr($file->getFilename(), 0, -5) . DEST_EXT;
+    return DEST_DIR . substr($file->getFilename(), 0, -5) . '.' . DEST_EXT;
 }
