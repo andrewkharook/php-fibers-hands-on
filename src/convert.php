@@ -17,16 +17,32 @@ const DEST_EXT = 'jpg';
 
 $converter = getenv('CONVERTER_BIN') ?: 'convert';
 
+$fiberList = [];
+
 $start = microtime(true);
 foreach (new DirectoryIterator(SOURCE_DIR) as $item) {
     if ($item->getExtension() === SOURCE_EXT) {
         $src = $item->getPathname();
         $dest = getDestPath($item);
-        convertPhoto($converter, $src, $dest);
 
-        echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
+        $fiber = new Fiber(convertPhoto(...));
+        $fiber->start($converter, $src, $dest);
+        $fiberList[] = $fiber;
     }
 }
+
+while ($fiberList) {
+    foreach ($fiberList as $id => $fiber) {
+        if ($fiber->isTerminated()) {
+            [$source, $destination] = $fiber->getReturn();
+            echo 'Successfully converted ' . $src . ' => ' . $dest . PHP_EOL;
+            unset($fiberList[$id]);
+        } else {
+            $fiber->resume();
+        }
+    }
+}
+
 $end = microtime(true);
 echo 'Directory processed in ' . round($end - $start, 1) . ' seconds' . PHP_EOL;
 
@@ -53,9 +69,8 @@ function convertPhoto(string $converter, string $src, string $dest): array
     }
 
     do {
-        usleep(1000);
+        Fiber::suspend();
         $status = proc_get_status($proc);
-        // var_dump($status);
     } while ($status['running']);
 
     proc_close($proc);
